@@ -1,0 +1,412 @@
+function Segments = Skeletize_Segments( Array_In, MinBranchLength)
+
+Debug_1 = 1;
+Debug_2 = Debug_1;
+Debug_3 = Debug_1;
+Debug_4 = Debug_1;
+
+% % % load '~/Dropbox/ComputerPrograms/Satellite_Model_SST_Processing/AI-SST/Data/Debug_Abbreviated.mat'
+% % % global AxisFontSize TitleFontSize Trailer_Info
+% % % AxisFontSize = 20;
+% % % TitleFontSize = 30;
+% % % Trailer_Info = '_Original';
+% % % global Thresholds
+% % % Thresholds.segment_length = 3;
+
+Segments(1).Pixels = [];
+
+global Thresholds
+
+% If Segments has been passed in get its length; we will increment it.
+
+% % % if exist('Segments')
+% % %     iSegment = length(Segments);
+% % % else
+% % %     iSegment = 0;
+% % % end
+
+if ~exist('MinBranchLength')
+    MinBranchLength = 0;
+end
+
+% Get the skeleton array
+
+initial_skel = bwskel(logical(Array_In),'MinBranchLength', MinBranchLength);
+
+% Get rid of spurs. Each skeketon pixel after applying bwskel will have at most
+% 3 other skeleton pixels touching it. A spur is a skeleton pixel touching
+% 1 other skeleton pixel, which touches at least 2 other pixels. The 'o'
+% skeleton pixel below is a spur.
+%
+%   x
+%    x
+%     xo
+%    x
+%     x
+%     x
+
+% % %     skel_no_spur = bwmorph(initial_skel, 'spur');
+skel_no_spur = initial_skel;
+Array_In = single(skel_no_spur);
+
+% process as long as there are still some points in Array_In. Points are
+% removed as segments are found.
+
+First = 1;
+
+iSegment = 0;
+
+last_nn = find(skel_no_spur==1);
+while ~isempty(last_nn)
+    
+    % Get the pixel locations in the skeleton array.
+    
+    [iS, jS] = find(skel_no_spur == 1);
+    
+    if First == 1
+        First = 0;
+        iSsave = iS;
+        jSsave = jS;
+    end
+    
+    if length(iS)<=1  % Only one masked pixel at this point, exit while.
+        return
+    end
+    
+    % Find branch points. A branch point is a skeleton pixel connected to 3
+    % other skeleton pixels, each of which is connected to 2 pixels. The 'o'
+    % skeleton pixel below is a branch point.  bwmorph returns an array of
+    % the same size as the input array with all pixel values set to 0 except
+    % for the branch points.
+    %
+    %   x   x
+    %    oxx
+    %    x
+    %    x
+    %     x
+    %     x
+    
+    skel_branch_point_array = bwmorph( skel_no_spur, 'branchpoints');
+    iB = [];
+    jB = [];
+    if ~isempty(find(skel_branch_point_array==1))
+        [iB, jB] = find(skel_branch_point_array == 1);
+    end
+    
+    % Finally get the end points of the skeleton. These are skeleton points
+    % connected to only 1 other skeleton point. Note that there will be one
+    % point at the end of each branch.
+    
+    skel_end_point_array = bwmorph( skel_no_spur, 'endpoints');
+    %     skel_end_point_array = BOHitOrMiss(skel_no_spur, 'end');
+    [iE, jE] = find(skel_end_point_array == 1);
+    Num_Ends = length(iE);
+    
+    if length(iE)<=1  % Only one masked pixel at this point; return.
+        return
+    end
+    
+    % % % % If no branch points, only one segment, save it and go to end of while.
+    % % %
+    % % % if length(iB) == 0
+    % % %     Boundary = bwtraceboundary(skel_no_spur, [iE(1) jE(1)], 'W');
+    % % %     Segments(iSeg).Pixels = Boundary(1:floor(length(Boundary/2)),:);
+    % % %     return
+    % % % end
+    % % %
+    % % % % Here if nore than one break point.
+    
+    iEB = [iE; iB];
+    jEB = [jE; jB];
+    Num_EB = length(iEB);
+    
+    if Debug_1
+        Plot_Array_In
+    end
+    
+    index_vector = 1:length(iEB);
+    
+    % Now start at one end point and get the boudaries, which for a line 1
+    % pixel wide follows the line twice. Be careful on one side it will go down
+    % one branch and on the other side it will go down the other branch when
+    % the line splits.
+    
+    % Get all boundary points starting at this end point.
+    
+    Boundary = bwtraceboundary(skel_no_spur, [iE(1) jE(1)], 'W');
+    
+    % Loop over end points and branch points.
+    
+    clear Num_Found Loc_in_Mask_Temp Loc_on_Boundary_Temp End_Branch_Pt_Num_Temp
+    
+    iPtsOnBoundary = 0;
+    for iBdPt=1:Num_EB
+        
+        % If this is a break point or an end point end this segment and start
+        % another one otherwise save this pixel location to the current segment.
+        
+        Boundary_Points_Temp = find( (iEB(iBdPt) == Boundary(:,1)) & (jEB(iBdPt) == Boundary(:,2)));
+        
+        Num_Found(iBdPt) = length(Boundary_Points_Temp);
+        
+        for i=1:Num_Found(iBdPt)
+            iPtsOnBoundary = iPtsOnBoundary + 1;
+            Loc_in_Mask_Temp(iPtsOnBoundary,:) = [iEB(iBdPt) jEB(iBdPt)];
+            Loc_on_Boundary_Temp(iPtsOnBoundary,:) = Boundary_Points_Temp(i);
+            End_Branch_Pt_Num_Temp(iPtsOnBoundary,:) = iBdPt;
+        end
+    end
+    
+    % Reorder boundary points.
+    
+    [Loc_on_Boundary, iLocSorted] = sort(Loc_on_Boundary_Temp);
+    Loc_in_Mask = Loc_in_Mask_Temp(iLocSorted,:);
+    End_Branch_Pt_Num = End_Branch_Pt_Num_Temp(iLocSorted);
+    
+    if Debug_2
+        disp(1:length(Num_Found))
+        disp(Num_Found)
+        Loc_on_Boundary'
+        End_Branch_Pt_Num'
+    end
+    
+    % Get segments
+    
+    clear pairs_processed
+    
+    for iEBPt=1:Num_EB
+        pairs_processed(iEBPt).pairs = [0 0];
+    end
+    
+    for iEBPt=2:length(Loc_on_Boundary)
+        
+        % Get the points between this end or branch point and the previous one.
+        
+        pts = Boundary(Loc_on_Boundary(iEBPt-1):Loc_on_Boundary(iEBPt),:);
+        
+        nPts = size(pts,1);
+        
+        if Debug_3
+            figure(2)
+            plot(pts(:,1), pts(:,2), 'linewidth',5)
+        end
+        
+        % Save this pair in processed pairs structure to make sure we don't do
+        % it again.
+        
+        previous_pt = End_Branch_Pt_Num(iEBPt-1);
+        this_pt     = End_Branch_Pt_Num(iEBPt);
+        
+        % Has this pair been processed already?
+        
+        [pairs_processed, found_pair] =  Check_This_Segment(previous_pt, this_pt, pairs_processed);
+        
+% % %         new_pair = [previous_pt this_pt];
+% % %         new_pair_reversed = [this_pt previous_pt];
+% % %                 
+% % %         % Has this pair already been processed? Concatenate the pairs found
+% % %         % thus far from this point and the previous point to cover all bases. 
+% % %         % Probably could do just one of the end points but I kept finding
+% % %         % special cases where that didn't work so doing both ends now.
+% % %         
+% % %         pairs = [pairs_processed(this_pt).pairs; pairs_processed(previous_pt).pairs];
+% % %         
+% % %         found_pair = 0;
+% % %         for iProcessed=1:size(pairs,1)
+% % %             if (pairs(iProcessed,:) == new_pair_reversed) | (pairs(iProcessed,:) == new_pair)
+% % %                 found_pair = 1;
+% % %                 break
+% % %             end
+% % %         end
+                
+        % Skip this one if this pair has already been processed.
+        
+        if found_pair == 0
+            % % %             disp(['Found this pair: ' num2str(new_pair)])
+            % % %         else
+            
+% % %             pairs_processed(previous_pt).pairs = [pairs_processed(previous_pt).pairs; new_pair_reversed; new_pair];
+% % %             pairs_processed(this_pt).pairs = [pairs_processed(this_pt).pairs; new_pair_reversed; new_pair];
+            
+            % Only work on this segment if it is long enough.
+            
+            nPts = length(pts);
+            if nPts < Thresholds.segment_length
+                skel_no_spur(pts(:,1), pts(:,2)) = 0;
+            else
+                
+                % Are there any end or branch points within one point of
+                % this line. Make a new list of end/branch points excluding
+                % the two just found.
+                
+                new_iEB = iEB(index_vector~=this_pt & index_vector~=previous_pt);
+                new_jEB = jEB(index_vector~=this_pt & index_vector~=previous_pt);
+                
+                % Also remove any other end/branch points that are within
+                % one pixel of the two points at the end of this segment.
+                % This happens sometimes when there are two adjacent branch
+                % points.
+                
+                nn = find( (abs(new_iEB-iEB(this_pt)) < 2) & (abs(new_jEB-jEB(this_pt)) < 2));
+                if isempty(nn) == 0
+                    for inn=1:length(nn)
+                        new_index_vector = [1:length(new_iEB)];
+                        new_iEB = new_iEB(new_index_vector~=nn(inn));
+                        new_jEB = new_jEB(new_index_vector~=nn(inn));
+                    end
+                end
+                
+                nn = find( (abs(new_iEB-iEB(previous_pt)) < 2) & (abs(new_jEB-jEB(previous_pt)) < 2));
+                if isempty(nn) == 0
+                    for inn=1:length(nn)
+                        new_index_vector = [1:length(new_iEB)];
+                        new_iEB = new_iEB(new_index_vector~=nn(inn));
+                        new_jEB = new_jEB(new_index_vector~=nn(inn));
+                    end
+                end
+
+% % %                 found_EB = 0;
+                
+                % %                     for ipts=2:nPts-1
+                iStart = 1;
+                for ipts=1:nPts-1
+                    nn = find( (abs(pts(ipts,1)-new_iEB) < 2) & (abs(pts(ipts,2)-new_jEB) < 2) );
+                    
+                    found_EB = 0;
+                    if ~isempty(nn)
+% % %                         found_EB = 1;
+                        % % % % %                             break
+                        
+                        BPN = find( (iEB == new_iEB(nn)) & (jEB == new_jEB(nn)));
+
+                        [pairs_processed, found_pair] =  Check_This_Segment(previous_pt, this_pt, pairs_processed);
+
+% % %                         new_pair = [previous_pt BPN];
+% % %                         new_pair_reversed = [BPN previous_pt];
+% % %                         
+% % %                         % Has this pair already been processed? Concatenate
+% % %                         % the pairs found thus far from this point and the
+% % %                         % previous point to cover all bases.
+% % %                         
+% % %                         pairs = [pairs_processed(BPN).pairs; pairs_processed(previous_pt).pairs];
+% % %                         
+% % %                         found_pair = 0;
+% % %                         for iProcessed=1:size(pairs,1)
+% % %                             if (pairs(iProcessed,:) == new_pair_reversed)  | (pairs(iProcessed,:) == new_pair)
+% % %                                 found_pair = 1;
+% % %                                 break
+% % %                             end
+% % %                         end
+                        
+                        if found_pair == 1
+% % %                             this_pt = previous_pt;
+                            previous_pt = BPN;
+                            iStart = ipts;
+                            
+                            % Need to reset the list of end/break points to
+                            % search for, excluding the one just found.
+                            
+                            new_iEB = iEB(index_vector~=this_pt & index_vector~=previous_pt);
+                            new_jEB = jEB(index_vector~=this_pt & index_vector~=previous_pt);
+                        else
+% % %                             pairs_processed(previous_pt).pairs = [pairs_processed(previous_pt).pairs; new_pair_reversed; new_pair];
+% % %                             pairs_processed(this_pt).pairs = [pairs_processed(this_pt).pairs; new_pair_reversed; new_pair];
+                            pts = pts(iStart:ipts,:);
+                            break
+                        end
+                    end
+                end
+                % % %                 else
+                % % %
+                % % %                     for ipts=1:length(new_iEB)
+                % % %                         nn = find( (abs(new_iEB(ipts)-pts(:,1)) < 2) & (abs(new_jEB(ipts)-pts(:,2)) < 2) );
+                % % %                         if ~isempty(nn)
+                % % %                             found_one = 1;
+                % % %                             break
+                % % %                         end
+                % % %                     end
+                % % %                 end
+                
+                % Continue to process if no end or branch points were found near
+                % this segment.
+                
+% % %                 if found_EB == 0
+                    
+                    % Save this segment.
+                    
+                    iSegment = iSegment + 1;
+                    Segments(iSegment).Pixels = pts;
+                    
+                    % Zero out these points on the skeleton array.
+                    
+                    last_nn = sub2ind(size(skel_no_spur), pts(:,1), pts(:,2));
+                    skel_no_spur(last_nn) = 0;
+                    
+                    if Debug_4
+                        Plot_Masks( 1, 3, 1, skel_no_spur);
+                        ANSWER = input(['Segement #: ' num2str(iSegment) '. k for keyboard, <cr> to continue: '],'s');
+                        
+                        switch ANSWER
+                            case 'k'
+                                keyboard
+                                
+                            case 'q'
+                                return
+                        end
+                    end
+% % %                 end
+            end
+        end
+    end
+end
+
+end
+
+%% Functions called.
+
+function [pairs_processed, found_pair] = Check_This_Segment(first_pt, last_pt, pairs_processed)
+% Check_This_Segment - check to see if this segment has been processed.
+%
+% Called from Skeletize_Segments
+%
+% INPUT
+%   first_pt - the number of the first point on the segment in the list 
+%    of end and branch points.
+%   last_pt - the number of the last (second) point on the segment in the  
+%    list of end and branch points.
+%   pairs_processed - structure function of the pairs of points processed
+%    to date.
+%
+% OUTPUT
+%   pairs_processed - updated structure of the pairs of points processed
+%    to date if these points have not been processed yet.
+%   found_pair - 0 if this pair of point has not been processed yet, 1 if
+%    it has.
+%
+
+new_pair = [first_pt last_pt];
+new_pair_reversed = [last_pt first_pt];
+
+% Has this pair already been processed? Concatenate the pairs found
+% thus far from this point and the previous point to cover all bases.
+% Probably could do just one of the end points but I kept finding
+% special cases where that didn't work so doing both ends now.
+
+pairs = [pairs_processed(last_pt).pairs; pairs_processed(first_pt).pairs];
+
+found_pair = 0;
+for iProcessed=1:size(pairs,1)
+    if (pairs(iProcessed,:) == new_pair_reversed) | (pairs(iProcessed,:) == new_pair)
+        found_pair = 1;        
+        break
+    end
+end
+
+if found_pair == 0
+    pairs_processed(first_pt).pairs = [pairs_processed(first_pt).pairs; new_pair_reversed; new_pair];
+    pairs_processed(last_pt).pairs = [pairs_processed(last_pt).pairs; new_pair_reversed; new_pair];
+end
+
+end
+
+
